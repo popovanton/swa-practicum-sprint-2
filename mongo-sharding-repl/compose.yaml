@@ -1,0 +1,364 @@
+name: mongo-sharding-repl
+services:
+  configSrv:
+    image: mongo:latest
+    container_name: configSrv 
+    restart: always
+    ports:
+      - "27016:27016"
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.5
+    volumes:
+      - config_data:/data/db
+    command:
+      [
+        "--configsvr",
+        "--replSet",
+        "config_server",
+        "--bind_ip_all",
+        "--port",
+        "27016"
+      ] 
+    healthcheck:
+      test: [ "CMD", "mongosh","--port", "27016", "--eval", "db.adminCommand('ping')" ]
+      interval: 5s
+      start_period: 10s
+  
+  configSrv_setup:
+    image: mongo:latest 
+    depends_on:
+      - configSrv
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.31
+    restart: "no"
+    entrypoint: [ "bash", "-c", "sleep 30 && mongosh --host configSrv:27016 --eval 'rs.initiate(
+  {
+    _id : \"config_server\",
+    configsvr: true,
+    members: [
+      { _id : 0, host : \"configSrv:27016\" }
+    ]
+  }
+);'"]
+
+  mongos_router:
+    image: mongo:latest
+    container_name: mongos_router
+    restart: always
+    ports:
+      - "27030:27030"
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.6
+    command:
+      [
+        "mongos",
+        "--configdb", 
+        "config_server/configSrv:27016",
+        "--bind_ip_all",
+        "--port",
+        "27030"
+      ]
+    healthcheck:
+      test: [ "CMD", "mongosh","--port", "27030", "--eval", "db.adminCommand('ping')" ]
+      interval: 5s
+      start_period: 10s
+
+  mongos_router_setup:
+    image: mongo:latest 
+    depends_on:
+      - mongos_router
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.30
+    restart: "no"
+    entrypoint: [ "bash", "-c", "sleep 60 && mongosh --host mongos_router:27030 --eval 'sh.addShard(\"rs0/mongodb1:27017\");' 
+    && mongosh --host mongos_router:27030 --eval 'sh.addShard(\"rs1/mongodb2:27021\");' 
+    && mongosh --host mongos_router:27030 --eval 'sh.enableSharding(\"somedb\");'
+    && mongosh --host mongos_router:27030 --eval 'sh.shardCollection(\"somedb.helloDoc\", { \"name\" : \"hashed\" } )'"]
+
+  mongodb1_setup:
+    image: mongo:latest 
+    depends_on:
+      - mongodb1
+      - mongodb1_repl1
+      - mongodb1_repl2
+      - mongodb1_repl3
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.32
+    restart: "no"
+    entrypoint: [ "bash", "-c", "sleep 30 && mongosh --host mongodb1:27017 --eval 'rs.initiate({_id: \"rs0\", members: [
+{_id: 0, host: \"mongodb1:27017\"},
+{_id: 1, host: \"mongodb1_repl1:27018\"},
+{_id: 2, host: \"mongodb1_repl2:27019\"},
+{_id: 3, host: \"mongodb1_repl3:27020\"}
+]})'"]
+
+  mongodb2_setup:
+    image: mongo:latest 
+    depends_on:
+      - mongodb2
+      - mongodb2_repl1
+      - mongodb2_repl2
+      - mongodb2_repl3
+    restart: "no"
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.29
+    entrypoint: [ "bash", "-c", "sleep 30 && mongosh --host mongodb2:27021 --eval 'rs.initiate({_id: \"rs1\", members: [
+  {_id: 0, host: \"mongodb2:27021\"},
+{_id: 1, host: \"mongodb2_repl1:27022\"},
+{_id: 2, host: \"mongodb2_repl2:27023\"},
+{_id: 3, host: \"mongodb2_repl3:27024\"}
+]})'"]   
+
+  mongodb1:
+    image: mongo:latest 
+    container_name: mongodb1
+    restart: always
+    depends_on:
+      - configSrv
+      - mongos_router
+      - mongodb1_repl1
+      - mongodb1_repl2
+      - mongodb1_repl3
+    ports:
+      - "27017:27017"
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.10
+    volumes:
+      - mongodb1_data_container:/data/db
+    command:
+      [
+        "--shardsvr",
+        "--replSet",
+        "rs0",
+        "--bind_ip_all",
+        "--port",
+        "27017"
+      ]
+    healthcheck:
+      test: [ "CMD", "mongosh","--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 5s
+      start_period: 10s
+
+  mongodb1_repl1:
+    image: mongo:latest 
+    container_name: mongodb1_repl1
+    restart: always
+    ports:
+      - "27018:27018"
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.11
+    volumes:
+      - mongodb1_repl1_data_container:/data/db
+    command:
+      [
+        "--shardsvr",
+        "--replSet",
+        "rs0",
+        "--bind_ip_all",
+        "--port",
+        "27018"
+      ]
+    healthcheck:
+      test: [ "CMD", "mongosh","--port", "27018", "--eval", "db.adminCommand('ping')" ]
+      interval: 5s
+      start_period: 10s
+
+  mongodb1_repl2:
+    image: mongo:latest 
+    container_name: mongodb1_repl2
+    restart: always
+    ports:
+      - "27019:27019"
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.12
+    volumes:
+      - mongodb1_repl2_data_container:/data/db
+    command:
+      [
+        "--shardsvr",
+        "--replSet",
+        "rs0",
+        "--bind_ip_all",
+        "--port",
+        "27019"
+      ]
+    healthcheck:
+      test: [ "CMD", "mongosh","--port", "27019", "--eval", "db.adminCommand('ping')" ]
+      interval: 5s
+      start_period: 10s
+
+  mongodb1_repl3:
+    image: mongo:latest 
+    container_name: mongodb1_repl3
+    restart: always
+    ports:
+      - "27020:27020"
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.13
+    volumes:
+      - mongodb1_repl3_data_container:/data/db
+    command:
+      [
+        "--shardsvr",
+        "--replSet",
+        "rs0",
+        "--bind_ip_all",
+        "--port",
+        "27020"
+      ]
+    healthcheck:
+      test: [ "CMD", "mongosh","--port", "27020", "--eval", "db.adminCommand('ping')" ]
+      interval: 5s
+      start_period: 10s
+
+  mongodb2:
+    image: mongo:latest
+    container_name: mongodb2
+    restart: always
+    depends_on:
+      - configSrv
+      - mongos_router
+      - mongodb2_repl1
+      - mongodb2_repl2
+      - mongodb2_repl3
+    ports:
+      - "27021:27021"
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.20
+    volumes:
+      - mongodb2_data_container:/data/db
+    command:
+      [
+        "--shardsvr",
+        "--replSet",
+        "rs1",
+        "--bind_ip_all",
+        "--port",
+        "27021"
+      ]
+    healthcheck:
+      test: [ "CMD", "mongosh","--port", "27021", "--eval", "db.adminCommand('ping')" ]
+      interval: 5s
+      start_period: 10s
+
+  mongodb2_repl1:
+    image: mongo:latest 
+    container_name: mongodb2_repl1
+    restart: always
+    ports:
+      - "27022:27022"
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.21
+    volumes:
+      - mongodb2_repl1_data_container:/data/db
+    command:
+      [
+        "--shardsvr",
+        "--replSet",
+        "rs1",
+        "--bind_ip_all",
+        "--port",
+        "27022"
+      ]
+    healthcheck:
+      test: [ "CMD", "mongosh","--port", "27022", "--eval", "db.adminCommand('ping')" ]
+      interval: 5s
+      start_period: 10s
+
+  mongodb2_repl2:
+    image: mongo:latest 
+    container_name: mongodb2_repl2
+    restart: always
+    ports:
+      - "27023:27023"
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.22
+    volumes:
+      - mongodb2_repl2_data_container:/data/db
+    command:
+      [
+        "--shardsvr",
+        "--replSet",
+        "rs1",
+        "--bind_ip_all",
+        "--port",
+        "27023"
+      ]
+    healthcheck:
+      test: [ "CMD", "mongosh","--port", "27023", "--eval", "db.adminCommand('ping')" ]
+      interval: 5s
+      start_period: 10s
+
+  mongodb2_repl3:
+    image: mongo:latest 
+    container_name: mongodb2_repl3
+    restart: always
+    ports:
+      - "27024:27024"
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.23
+    volumes:
+      - mongodb2_repl3_data_container:/data/db
+    command:
+      [
+        "--shardsvr",
+        "--replSet",
+        "rs1",
+        "--bind_ip_all",
+        "--port",
+        "27024"
+      ]
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27024", "--eval", "db.adminCommand('ping')" ]
+      interval: 5s
+      start_period: 10s  
+
+  pymongo_api:
+    container_name: pymongo_api
+    build: 
+      context: api_app
+      dockerfile: Dockerfile
+    image: kazhem/pymongo_api:1.0.0
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.15
+    depends_on:
+      - mongos_router
+    ports:
+      - 8080:8080
+    environment:
+      MONGODB_URL: "mongodb://mongos_router:27030"
+      MONGODB_DATABASE_NAME: "somedb"
+
+networks:
+  app-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 173.17.0.0/16
+
+volumes:
+  config_data:
+  mongodb1_data_container:
+  mongodb1_repl1_data_container:
+  mongodb1_repl2_data_container:
+  mongodb1_repl3_data_container:
+  mongodb2_data_container:
+  mongodb2_repl1_data_container:
+  mongodb2_repl2_data_container:
+  mongodb2_repl3_data_container:
